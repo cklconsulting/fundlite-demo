@@ -132,7 +132,15 @@ with tab3:
     
     # MOCK DATA based on profile
     if investor_profile == "Standard LP (Class A)":
-        committed = 5000000.00
+        # 1. Connect
+supabase = create_client(url, key)
+
+# 2. Query the database for ALL commitments and sum them up
+response = supabase.table('commitments').select("committed_amount").execute()
+
+# 3. Sum the list using Python math
+# Example data: [{'committed_amount': 1000000}, {'committed_amount': 200000}]
+committed = sum(row['committed_amount'] for row in response.data)
         funded = 2500000.00
         nav = 2850000.00
     else:
