@@ -90,7 +90,6 @@ with tab1:
             df = pd.DataFrame(comm_data.data)
             
             # Clean up the data (Flatten the nested investor name)
-            # The DB returns: {'committed_amount': 1000, 'investors': {'display_name': 'John'}}
             df['Investor Name'] = df['investors'].apply(lambda x: x['display_name'] if x else "Unknown")
             df['Commitment'] = df['committed_amount']
             
@@ -112,6 +111,9 @@ with tab1:
             display_df = df[['Investor Name', 'Commitment', 'Ownership %']].copy()
             display_df['Commitment'] = display_df['Commitment'].apply(fmt)
             display_df['Ownership %'] = display_df['Ownership %'].apply(lambda x: f"{x:.2f}%")
+            
+            # --- THE FIX: Start numbering at 1 instead of 0 ---
+            display_df.index = display_df.index + 1
             
             st.table(display_df)
             
