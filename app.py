@@ -118,148 +118,188 @@ with tab1:
         else:
             st.warning("No investors found. Go add some in Supabase!")
 
-# === TAB 2: CAPITAL CALL MODULE ===
+# === TAB 2: CAPITAL CALL (MAKER / CHECKER WORKFLOW) ===
 with tab2:
-    st.header("Initiate Capital Call")
+    st.header("Capital Call Management")
     
-    # 1. INPUTS
-    col1, col2 = st.columns(2)
-    with col1:
-        call_amount = st.number_input("Total Call Amount ($)", value=500000.00, step=10000.00)
-    with col2:
-        call_date = st.date_input("Due Date")
+    # Sub-tabs for the workflow
+    call_tab1, call_tab2 = st.tabs(["1️⃣ Create Draft", "2️⃣ Review & Post"])
     
-    # 2. PREVIEW (The Calculation)
-    st.subheader("Allocation Preview")
-    
-    if supabase and comm_data.data:
-        # Re-use the dataframe from Tab 1
-        # Logic: Investor Share = (Commitment / Total Fund) * Call Amount
-        df['Call Amount'] = (df['Ownership %'] / 100) * call_amount
+    # --- SUB-TAB 1: CREATE DRAFT ---
+    with call_tab1:
+        st.subheader("Step 1: Draft New Call")
         
-        # Display Preview Grid
-        preview_df = df[['Investor Name', 'Ownership %', 'Call Amount']].copy()
-        preview_df['Ownership %'] = preview_df['Ownership %'].apply(lambda x: f"{x:.2f}%")
-        preview_df['Call Amount'] = preview_df['Call Amount'].apply(fmt)
-        
-        st.dataframe(preview_df, use_container_width=True)
-        
-        st.info(f"ℹ️ You are calling **{fmt(call_amount)}**. Based on commitments, the system calculated the split above.")
-        
-        # 3. EXECUTE (Real Database Write)
-        st.divider()
-        if st.button("🚀 Post to Ledger (REAL)", type="primary"):
+        c1, c2 = st.columns(2)
+        with c1:
+            draft_amount = st.number_input("Total Call Amount ($)", value=100000.00, step=10000.00)
+        with c2:
+            draft_date = st.date_input("Due Date")
             
-            with st.spinner("Writing to Ledger..."):
-                try:
-                    # A. CREATE THE BATCH (The "Folder" for these transactions)
-                    batch_data = {
-                        "batch_date": str(call_date),
-                        "description": f"Capital Call: {fmt(call_amount)}",
-                        "status": "POSTED"
-                    }
-                    # Insert and get the new Batch ID back
-                    batch_resp = supabase.table('batches').insert(batch_data).execute()
-                    new_batch_id = batch_resp.data[0]['id']
-                    
-                    # B. PREPARE THE LEDGER ENTRIES
-                    entries_to_insert = []
-                    
-                    # Loop through our calculated dataframe
-                    for index, row in df.iterrows():
-                        entry = {
-                            "batch_id": new_batch_id,
-                            "commitment_id": row['id'],      # The Investor's Contract ID
-                            "trans_code": "CC-PRIN",         # Code for "Principal Call"
-                            "amount": row['Call Amount']     # Their calculated share
+        if supabase:
+            # Fetch investors to preview the split
+            comm_resp = supabase.table('commitments').select("*, investors(display_name)").execute()
+            if comm_resp.data:
+                df_draft = pd.DataFrame(comm_resp.data)
+                df_draft['Investor'] = df_draft['investors'].apply(lambda x: x['display_name'])
+                
+                # Calculate
+                total_comm = df_draft['committed_amount'].sum()
+                df_draft['Share'] = (df_draft['committed_amount'] / total_comm) * draft_amount
+                
+                # DISPLAY PREVIEW
+                st.markdown("### Allocation Preview")
+                preview_df = df_draft[['Investor', 'Share']].copy()
+                preview_df['Share'] = preview_df['Share'].apply(fmt)
+                
+                # FIX: Start Index at 1
+                preview_df.index = preview_df.index + 1
+                st.table(preview_df)
+                
+                if st.button("💾 Save as Draft", type="primary"):
+                    try:
+                        # A. Create Batch (Status = DRAFT)
+                        batch_data = {
+                            "batch_date": str(draft_date),
+                            "description": f"Call: {fmt(draft_amount)}",
+                            "status": "DRAFT" # <--- KEY CHANGE
                         }
-                        entries_to_insert.append(entry)
-                    
-                    # C. BULK INSERT (One command to save them all)
-                    supabase.table('ledger_entries').insert(entries_to_insert).execute()
-                    
-                    st.success(f"✅ Success! Posted Batch #{new_batch_id[:8]}...")
-                    st.balloons()
-                    
-                except Exception as e:
-                    st.error(f"❌ Database Error: {str(e)}")
+                        b_resp = supabase.table('batches').insert(batch_data).execute()
+                        new_batch_id = b_resp.data[0]['id']
+                        
+                        # B. Insert Draft Entries
+                        entries = []
+                        for idx, row in df_draft.iterrows():
+                            entries.append({
+                                "batch_id": new_batch_id,
+                                "commitment_id": row['id'],
+                                "trans_code": "CC-PRIN",
+                                "amount": row['Share']
+                            })
+                        supabase.table('ledger_entries').insert(entries).execute()
+                        st.success("✅ Draft Saved! Go to 'Review & Post' tab to finalize.")
+                        
+                    except Exception as e:
+                        st.error(str(e))
+    
+    # --- SUB-TAB 2: REVIEW & POST ---
+    with call_tab2:
+        st.subheader("Step 2: Review & Post")
+        
+        if supabase:
+            # Fetch batches that are strictly 'DRAFT'
+            draft_batches = supabase.table('batches').select("*").eq('status', 'DRAFT').execute()
             
-    else:
-        st.error("No investors found to allocate to.")
+            if draft_batches.data:
+                # Let user select a batch to review
+                batch_options = {f"{b['description']} ({b['batch_date']})": b['id'] for b in draft_batches.data}
+                selected_desc = st.selectbox("Select Draft to Review:", list(batch_options.keys()))
+                selected_batch_id = batch_options[selected_desc]
+                
+                st.divider()
+                
+                # Show the details of this draft
+                st.markdown(f"**Reviewing:** {selected_desc}")
+                
+                # Fetch entries for this batch
+                draft_entries = supabase.table('ledger_entries').select("*, commitments(investors(display_name))").eq('batch_id', selected_batch_id).execute()
+                
+                if draft_entries.data:
+                    df_review = pd.DataFrame(draft_entries.data)
+                    # Flatten the name again
+                    df_review['Investor'] = df_review['commitments'].apply(lambda x: x['investors']['display_name'] if x and x['investors'] else "Unknown")
+                    
+                    # Display for Review
+                    disp_review = df_review[['Investor', 'amount']].copy()
+                    disp_review['amount'] = disp_review['amount'].apply(fmt)
+                    
+                    # FIX: Start Index at 1
+                    disp_review.index = disp_review.index + 1
+                    st.table(disp_review)
+                    
+                    # THE "POST" ACTION
+                    col_p1, col_p2 = st.columns([1, 4])
+                    with col_p1:
+                        if st.button("🚀 POST TO LEDGER"):
+                            # Update Batch Status to POSTED
+                            supabase.table('batches').update({"status": "POSTED"}).eq('id', selected_batch_id).execute()
+                            st.success("✅ Transaction Posted Successfully!")
+                            st.rerun() # Refresh page
+                    with col_p2:
+                        if st.button("🗑️ DELETE DRAFT"):
+                            # Delete entries first (Foreign Key constraint), then batch
+                            supabase.table('ledger_entries').delete().eq('batch_id', selected_batch_id).execute()
+                            supabase.table('batches').delete().eq('id', selected_batch_id).execute()
+                            st.warning("Draft Deleted.")
+                            st.rerun()
+                            
+            else:
+                st.info("No pending drafts found.")
 
-
-# === TAB 3: LIVE PCAP STATEMENT ===
+# === TAB 3: LIVE PCAP STATEMENT (ROBUST VERSION) ===
 with tab3:
     st.header("Partner Capital Account (Live)")
-    st.markdown("Select an investor to view their real-time ledger generated from the database.")
+    st.markdown("View real-time ledger. **Note:** Only 'POSTED' transactions appear here.")
     
-    # Check if we have data before trying to run logic
-    if supabase and 'comm_data' in locals() and comm_data.data:
+    if supabase:
+        # 1. Fetch Investors
+        all_inv = supabase.table('investors').select("*").execute()
+        inv_map = {i['display_name']: i['id'] for i in all_inv.data} if all_inv.data else {}
         
-        # 1. SELECTOR: Choose who to look at
-        # We create a dictionary to map Name -> Commitment ID
-        investor_map = {row['Investor Name']: row['id'] for index, row in df.iterrows()}
-        selected_investor = st.selectbox("Select Investor:", list(investor_map.keys()))
-        selected_comm_id = investor_map[selected_investor]
-        
-        st.divider()
-        
-        # 2. QUERY: Fetch only THIS investor's ledger entries
-        response_ledger = supabase.table('ledger_entries')\
-            .select("*")\
-            .eq('commitment_id', selected_comm_id)\
-            .execute()
+        if inv_map:
+            sel_inv_name = st.selectbox("Select Investor:", list(inv_map.keys()))
             
-        if response_ledger.data:
-            df_ledger = pd.DataFrame(response_ledger.data)
+            # Find the commitment ID for this investor
+            # (In a real app, we'd handle multiple funds per investor, simplifying here)
+            comm_res = supabase.table('commitments').select("id").eq('investor_id', inv_map[sel_inv_name]).execute()
             
-            # 3. MATH: Calculate the Roll-Forward
-            # Sum up all "CC-PRIN" transactions
-            contributions = df_ledger[df_ledger['trans_code'] == 'CC-PRIN']['amount'].sum()
-            
-            # Sum up distributions (none yet, but we handle the logic)
-            # Use .get() in case the column doesn't exist yet to prevent crashes
-            distributions = 0
-            if not df_ledger.empty:
-                 # Check for distribution codes if you had them
-                 pass
-            
-            ending_balance = contributions - distributions
-            
-            # 4. DISPLAY: The Statement Header
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Beginning Balance", "$0.00")
-            c2.metric("Contributions", fmt(contributions))
-            c3.metric("Ending Capital", fmt(ending_balance))
-            
-            st.markdown("### Transaction History")
-            
-            # Clean up the table for display
-            display_ledger = df_ledger[['created_at', 'trans_code', 'amount']].copy()
-            # Convert amount to currency string
-            display_ledger['amount'] = display_ledger['amount'].apply(fmt)
-            
-            st.table(display_ledger)
-            
-            # ... (This goes after st.table) ...
-            
-            st.divider()
-            
-            # GENERATE PDF BUTTON
-            st.subheader("Official Documents")
-            
-            # Create the PDF in memory
-            pdf_bytes = create_pdf(selected_investor, "Harbor View Fund I", ending_balance, df_ledger)
-            
-            # The Download Button
-            st.download_button(
-                label="📥 Download Statement (PDF)",
-                data=pdf_bytes,
-                file_name=f"Statement_{selected_investor}_{date.today()}.pdf",
-                mime="application/pdf"
-            )            
-        else:
-            st.info("No transactions found for this investor yet. Go run a Capital Call in Tab 2!")
-    else:
-        st.warning("No investor data found. Please ensure Supabase is connected and populated.")
-        
+            if comm_res.data:
+                sel_comm_id = comm_res.data[0]['id']
+                
+                # 2. ROBUST QUERY: Join with Batches to filter for POSTED only
+                # Supabase-py join syntax is: "*, batches!inner(*)"
+                # This fetches entries AND their parent batch info
+                ledger_res = supabase.table('ledger_entries').select("*, batches!inner(status, batch_date)").eq('commitment_id', sel_comm_id).execute()
+                
+                # Filter in Python for safety
+                if ledger_res.data:
+                    raw_df = pd.DataFrame(ledger_res.data)
+                    
+                    # Extract Batch Status
+                    raw_df['status'] = raw_df['batches'].apply(lambda x: x['status'])
+                    raw_df['date'] = raw_df['batches'].apply(lambda x: x['batch_date'])
+                    
+                    # FILTER: Keep ONLY 'POSTED'
+                    posted_df = raw_df[raw_df['status'] == 'POSTED'].copy()
+                    
+                    if not posted_df.empty:
+                        # Calc Totals
+                        contrib = posted_df[posted_df['trans_code'] == 'CC-PRIN']['amount'].sum()
+                        end_bal = contrib # - distributions (future)
+                        
+                        # Metrics
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("Beginning Balance", "$0.00")
+                        m2.metric("Contributions", fmt(contrib))
+                        m3.metric("Ending Capital", fmt(end_bal))
+                        
+                        # Display History
+                        st.subheader("Transaction History")
+                        hist_df = posted_df[['date', 'trans_code', 'amount']].copy()
+                        hist_df['amount'] = hist_df['amount'].apply(fmt)
+                        hist_df.columns = ["Date", "Type", "Amount"]
+                        
+                        # FIX: Start Index at 1
+                        hist_df.index = hist_df.index + 1
+                        st.table(hist_df)
+                        
+                        # PDF Button Logic (Re-used from before)
+                        st.divider()
+                        pdf_bytes = create_pdf(sel_inv_name, "Harbor View Fund I", end_bal, posted_df)
+                        st.download_button("📥 Download Statement (PDF)", pdf_bytes, "statement.pdf", "application/pdf")
+                        
+                    else:
+                        st.info("No posted transactions yet (check Drafts?).")
+                else:
+                    st.info("No activity found.")
+            else:
+                st.warning("This investor has no commitment to the fund.")
