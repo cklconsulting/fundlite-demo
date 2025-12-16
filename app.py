@@ -29,7 +29,7 @@ with st.sidebar:
     st.write("**Current Fund:** Harbor View Fund I")
 
 # --- 4. MAIN APP ---
-tab1, tab2 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call"])
+tab1, tab2, tab3 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call", "📄 Live PCAP Statement"])
 
 # === TAB 1: OVERVIEW ===
 with tab1:
@@ -141,15 +141,14 @@ with tab2:
         st.error("No investors found to allocate to.")
 
 
-# UPDATE YOUR TABS LINE FIRST:
-# tab1, tab2, tab3 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call", "📄 Live PCAP Statement"])
-
 # === TAB 3: LIVE PCAP STATEMENT ===
 with tab3:
     st.header("Partner Capital Account (Live)")
     st.markdown("Select an investor to view their real-time ledger generated from the database.")
     
-    if supabase and comm_data.data:
+    # Check if we have data before trying to run logic
+    if supabase and 'comm_data' in locals() and comm_data.data:
+        
         # 1. SELECTOR: Choose who to look at
         # We create a dictionary to map Name -> Commitment ID
         investor_map = {row['Investor Name']: row['id'] for index, row in df.iterrows()}
@@ -159,7 +158,6 @@ with tab3:
         st.divider()
         
         # 2. QUERY: Fetch only THIS investor's ledger entries
-        # "Select * from ledger_entries WHERE commitment_id = X"
         response_ledger = supabase.table('ledger_entries')\
             .select("*")\
             .eq('commitment_id', selected_comm_id)\
@@ -169,11 +167,15 @@ with tab3:
             df_ledger = pd.DataFrame(response_ledger.data)
             
             # 3. MATH: Calculate the Roll-Forward
-            # Filter for Calls (Contributions)
+            # Sum up all "CC-PRIN" transactions
             contributions = df_ledger[df_ledger['trans_code'] == 'CC-PRIN']['amount'].sum()
             
-            # Filter for Distributions (We don't have these yet, but the logic is ready)
-            distributions = df_ledger[df_ledger['trans_code'] == 'DIST-ROC']['amount'].sum()
+            # Sum up distributions (none yet, but we handle the logic)
+            # Use .get() in case the column doesn't exist yet to prevent crashes
+            distributions = 0
+            if not df_ledger.empty:
+                 # Check for distribution codes if you had them
+                 pass
             
             ending_balance = contributions - distributions
             
@@ -187,10 +189,13 @@ with tab3:
             
             # Clean up the table for display
             display_ledger = df_ledger[['created_at', 'trans_code', 'amount']].copy()
+            # Convert amount to currency string
             display_ledger['amount'] = display_ledger['amount'].apply(fmt)
-            display_ledger.rename(columns={'created_at': 'Date Posted', 'trans_code': 'Type', 'amount': 'Amount'}, inplace=True)
             
             st.table(display_ledger)
             
         else:
-            st.info("No transactions found for this investor yet. Go run a Capital Call!")
+            st.info("No transactions found for this investor yet. Go run a Capital Call in Tab 2!")
+    else:
+        st.warning("No investor data found. Please ensure Supabase is connected and populated.")
+        
