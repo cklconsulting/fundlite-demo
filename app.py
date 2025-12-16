@@ -1,95 +1,110 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+from datetime import date, timedelta
 
-# --- PAGE CONFIGURATION (Browser Tab Title & Icon) ---
-st.set_page_config(
-    page_title="FundLite | Investor Portal",
-    page_icon="📊",
-    layout="wide"
-)
+# --- HELPER: FORMATTING FUNCTION ---
+def fmt(value):
+    return f"${value:,.2f}"
 
-# --- SESSION STATE (To remember inputs across tabs) ---
-if 'fund_size' not in st.session_state:
-    st.session_state.fund_size = 50000000
-if 'commitments' not in st.session_state:
-    st.session_state.commitments = 1000000
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="FundLite V2 | Investor Portal", page_icon="📊", layout="wide")
 
-# --- SIDEBAR (Global Controls) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("FundLite Admin")
-    st.info("🔒 Secure Demo Environment")
+    st.info("🔒 Secure Demo Environment v2.0")
     
-    st.markdown("### Current User")
-    st.text("Role: GP / Controller")
-    st.text("Entity: Fund II, LP")
+    # 1. Multi-Investor Simulation
+    st.header("Simulation Settings")
+    investor_profile = st.selectbox(
+        "View as Investor Type:",
+        ["Standard LP (Class A)", "Founder/VIP (Class B)"]
+    )
     
-    st.divider()
-    st.write("Development Status: **Alpha v0.1**")
-    st.write("Built with Python & Streamlit")
+    # Logic to change fees based on selection
+    if investor_profile == "Standard LP (Class A)":
+        mgmt_fee_rate = 2.0
+        carry_rate = 0.20
+        tag = "Fee Paying"
+    else:
+        mgmt_fee_rate = 0.0
+        carry_rate = 0.10
+        tag = "No Fee / Reduced Carry"
+        
+    st.caption(f"Applied Profile: **{tag}**")
+    st.caption(f"Mgmt Fee: {mgmt_fee_rate}% | Carry: {int(carry_rate*100)}%")
 
 # --- MAIN APP TABS ---
-tab1, tab2, tab3 = st.tabs(["📝 Fund Setup", "💸 Waterfall Engine", "📱 Investor Dashboard (Mock)"])
+tab1, tab2, tab3 = st.tabs(["📝 Fund Setup", "💸 Smart Waterfall (Cumulative)", "📱 Investor Dashboard"])
 
 # === TAB 1: FUND SETUP ===
 with tab1:
     st.header("Fund Configuration")
-    st.markdown("Define the structural parameters for the fund. This drives the math in the backend.")
-    
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Structure")
         fund_name = st.text_input("Fund Legal Name", value="Harbor View Real Estate Fund II, LP")
-        inception_date = st.date_input("Inception Date")
-        currency = st.selectbox("Base Currency", ["USD", "EUR", "GBP"])
+        inception_date = st.date_input("Inception Date", value=date(2023, 1, 1))
         
     with col2:
-        st.subheader("Economics")
-        st.session_state.fund_size = st.number_input("Target Fund Size ($)", value=50000000, step=1000000)
-        mgmt_fee = st.number_input("Management Fee (%)", value=2.0, step=0.1)
-        hurdle_rate = st.number_input("Preferred Return / Hurdle (%)", value=8.0, step=0.5)
-
-    st.success("✅ Configuration Saved to Memory")
+        st.subheader("Economics (Global)")
+        fund_size = st.number_input("Target Fund Size ($)", value=50000000.00, step=1000000.00, format="%.2f")
+        hurdle_rate = st.number_input("Preferred Return (%)", value=8.0, step=0.5)
 
 # === TAB 2: WATERFALL ENGINE ===
 with tab2:
-    st.header("Distribution Waterfall Calculator")
-    st.markdown("Simulate a Deal-by-Deal (American) distribution event.")
+    st.header("Deal-by-Deal Distribution Engine")
+    st.markdown("Calculates **Time-Weighted** Preferred Return based on dates.")
     
-    # Inputs for the calculator
-    lc1, lc2, lc3 = st.columns(3)
-    with lc1:
-        capital_contrib = st.number_input("Cap Contributed to Deal ($)", value=1000000)
-    with lc2:
-        accrued_pref = st.number_input("Accrued Pref ($)", value=150000)
-    with lc3:
-        catchup_pct = st.slider("GP Catch-up %", 0.0, 1.0, 0.20)
-        
+    # --- STEP 1: INPUTS ---
+    st.subheader("1. Deal Context")
+    wc1, wc2, wc3 = st.columns(3)
+    with wc1:
+        capital_contrib = st.number_input("Capital Contributed ($)", value=1000000.00, step=10000.00)
+    with wc2:
+        # Date Logic for Pref
+        last_dist_date = st.date_input("Last Distribution Date", value=date(2023, 1, 1))
+        current_dist_date = st.date_input("Current Distribution Date", value=date(2024, 1, 1))
+    with wc3:
+        # Calculate Days
+        days_elapsed = (current_dist_date - last_dist_date).days
+        st.metric("Days Elapsed", f"{days_elapsed} days")
+    
+    # --- STEP 2: PREF CALCULATION ---
+    # Formula: Principal * Rate * (Days / 365)
+    calc_pref_amount = capital_contrib * (hurdle_rate / 100) * (days_elapsed / 365)
+    
+    st.info(f"🧮 **Auto-Calculated Pref:** {fmt(capital_contrib)} × {hurdle_rate}% × ({days_elapsed}/365) = **{fmt(calc_pref_amount)}**")
+    
+    # Allows user to override if needed (e.g. cumulative unpaid from prior periods)
+    accrued_pref = st.number_input("Total Accrued Pref Output (Editable)", value=calc_pref_amount, step=1000.00)
+
     st.divider()
     
-    cash_to_dist = st.number_input("Cash Available for Distribution ($)", value=2500000, step=10000)
+    # --- STEP 3: DISTRIBUTION ---
+    st.subheader("2. Execute Distribution")
+    cash_to_dist = st.number_input("Cash Available to Distribute ($)", value=2500000.00, step=10000.00)
     
     if st.button("Run Waterfall Calculation", type="primary"):
-        # --- THE LOGIC ENGINE ---
-        log = []
         remaining = cash_to_dist
         
-        # 1. Return of Capital
+        # Bucket 1: Return of Capital
         b1 = min(remaining, capital_contrib)
         remaining -= b1
         
-        # 2. Pref
+        # Bucket 2: Pref (Time-Weighted)
         b2 = min(remaining, accrued_pref)
         remaining -= b2
         
-        # 3. Catchup
-        catchup_req = (b2 / (1 - catchup_pct)) * catchup_pct
+        # Bucket 3: Catchup (Dynamic based on selected Class)
+        catchup_req = (b2 / (1 - carry_rate)) * carry_rate
         b3 = min(remaining, catchup_req)
         remaining -= b3
         
-        # 4. Carry Split
-        b4_lp = remaining * (1 - catchup_pct)
-        b4_gp = remaining * catchup_pct
+        # Bucket 4: Carry Split
+        b4_lp = remaining * (1 - carry_rate)
+        b4_gp = remaining * carry_rate
         
         # Totals
         total_lp = b1 + b2 + b4_lp
@@ -98,54 +113,68 @@ with tab2:
         # Display Results
         st.markdown("### 📊 Distribution Results")
         m1, m2, m3 = st.columns(3)
-        m1.metric("Total to LPs", f"${total_lp:,.2f}", delta="Net Distribution")
-        m2.metric("Total to GP (Carry)", f"${total_gp:,.2f}", delta="Performance Fee")
-        m3.metric("Effective Split", f"{round((total_gp/cash_to_dist)*100, 1)}% GP / {round((total_lp/cash_to_dist)*100, 1)}% LP")
+        m1.metric("Total to LP", fmt(total_lp), delta=f"Split: {round((total_lp/cash_to_dist)*100, 1)}%")
+        m2.metric("Total to GP (Carry)", fmt(total_gp), delta=f"Split: {round((total_gp/cash_to_dist)*100, 1)}%")
+        m3.metric("GP Carry Rate Used", f"{int(carry_rate*100)}%")
         
-        # Data Table
+        # Detailed Table
         breakdown_data = {
-            "Bucket": ["1. Return of Capital", "2. Preferred Return", "3. GP Catch-up", "4. Carried Interest (GP)", "4. Residual (LP)"],
-            "Amount": [b1, b2, b3, b4_gp, b4_lp],
+            "Waterfall Bucket": ["1. Return of Capital", "2. Preferred Return (Time-Weighted)", "3. GP Catch-up", "4. Carried Interest (GP)", "4. Residual (LP)"],
+            "Amount": [fmt(b1), fmt(b2), fmt(b3), fmt(b4_gp), fmt(b4_lp)],
             "Recipient": ["LP", "LP", "GP", "GP", "LP"]
         }
-        df = pd.DataFrame(breakdown_data)
-        st.table(df)
+        st.table(pd.DataFrame(breakdown_data))
 
 # === TAB 3: INVESTOR DASHBOARD ===
 with tab3:
-    st.header("Investor Portal View")
-    st.markdown("*This is what the Limited Partner (LP) sees on their phone.*")
+    st.header(f"Investor Portal: {investor_profile}")
+    st.markdown("*Real-time view of current position.*")
     
-    # Mock Data for Visuals
-    st.markdown("#### 👋 Welcome back, John Doe Trust")
+    # MOCK DATA based on profile
+    if investor_profile == "Standard LP (Class A)":
+        committed = 5000000.00
+        funded = 2500000.00
+        nav = 2850000.00
+    else:
+        # Founder put in less money but has higher returns due to no fees
+        committed = 1000000.00
+        funded = 500000.00
+        nav = 600000.00 # Higher relative NAV due to 0% fees
+        
+    unfunded = committed - funded
     
-    # KPI Cards
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("NAV", "$1,245,000", "+$45k")
-    k2.metric("Net IRR", "14.2%", "+0.5%")
-    k3.metric("TVPI", "1.45x")
-    k4.metric("DPI", "0.32x")
+    # --- ROW 1: CAPITAL STATUS (The new Request) ---
+    st.subheader("Capital Account Status")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Committed", fmt(committed))
+    c2.metric("Total Funded", fmt(funded), delta=f"{int(funded/committed*100)}% Called")
+    c3.metric("Remaining Unfunded", fmt(unfunded))
     
     st.divider()
     
+    # --- ROW 2: PERFORMANCE ---
+    st.subheader("Performance Metrics")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Current NAV", fmt(nav))
+    k2.metric("Net IRR", "14.2%")
+    k3.metric("TVPI", "1.45x")
+    k4.metric("DPI", "0.32x")
+    
     # Chart
-    st.subheader("Portfolio Value Over Time")
+    st.subheader("NAV Growth")
     chart_data = pd.DataFrame({
-        'Date': pd.date_range(start='1/1/2023', periods=12, freq='M'),
-        'Value': [1000000, 1020000, 1015000, 1050000, 1080000, 1100000, 1150000, 1140000, 1180000, 1200000, 1220000, 1245000]
+        'Date': pd.date_range(start='1/1/2023', periods=6, freq='Q'),
+        'Value': [funded * 0.98, funded * 1.05, funded * 1.10, funded * 1.12, funded * 1.15, nav]
     })
     
     c = alt.Chart(chart_data).mark_area(
-        line={'color':'#4F46E5'},
+        line={'color':'#10B981'},
         color=alt.Gradient(
             gradient='linear',
-            stops=[alt.GradientStop(color='#4F46E5', offset=0),
+            stops=[alt.GradientStop(color='#10B981', offset=0),
                    alt.GradientStop(color='white', offset=1)],
             x1=1, x2=1, y1=1, y2=0
         )
-    ).encode(
-        x='Date',
-        y='Value'
-    ).properties(height=300)
+    ).encode(x='Date', y='Value').properties(height=300)
     
     st.altair_chart(c, use_container_width=True)
