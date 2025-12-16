@@ -111,11 +111,22 @@ with tab1:
             display_df = df[['Investor Name', 'Commitment', 'Ownership %']].copy()
             display_df['Commitment'] = display_df['Commitment'].apply(fmt)
             display_df['Ownership %'] = display_df['Ownership %'].apply(lambda x: f"{x:.2f}%")
+        
             
-            # --- THE FIX: Start numbering at 1 instead of 0 ---
+            # --- THE FIX: Right-Align Numbers using Pandas Styler ---
+            st.subheader("Cap Table (Ownership)")
+            
+            # 1. Start Index at 1
             display_df.index = display_df.index + 1
             
-            st.table(display_df)
+            # 2. Apply Right Alignment style
+            # We tell it: "For columns 'Commitment' and 'Ownership %', align text to right"
+            styled_df = display_df.style.set_properties(
+                subset=['Commitment', 'Ownership %'], 
+                **{'text-align': 'right'}
+            )
+            
+            st.table(styled_df)            
             
         else:
             st.warning("No investors found. Go add some in Supabase!")
