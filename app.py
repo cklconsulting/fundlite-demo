@@ -29,7 +29,7 @@ with st.sidebar:
     st.write("**Current Fund:** Harbor View Fund I")
 
 # --- 4. MAIN APP ---
-# tab1, tab2, tab3 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call", "📄 Live PCAP Statement"])
+tab1, tab2 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call"])
 
 # === TAB 1: OVERVIEW ===
 with tab1:
@@ -140,6 +140,9 @@ with tab2:
     else:
         st.error("No investors found to allocate to.")
 
+
+# UPDATE YOUR TABS LINE FIRST:
+# tab1, tab2, tab3 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call", "📄 Live PCAP Statement"])
 
 # === TAB 3: LIVE PCAP STATEMENT ===
 with tab3:
