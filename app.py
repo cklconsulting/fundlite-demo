@@ -1,7 +1,54 @@
+from fpdf import FPDF
+import tempfile
 import streamlit as st
 import pandas as pd
 from datetime import date
 from supabase import create_client
+
+# --- PDF GENERATOR FUNCTION ---
+def create_pdf(investor_name, fund_name, balance, transactions):
+    # 1. Setup the Page
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    
+    # 2. Header
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, txt=fund_name, ln=True, align='C')
+    pdf.set_font("Arial", "I", 10)
+    pdf.cell(200, 10, txt="Capital Account Statement", ln=True, align='C')
+    pdf.line(10, 30, 200, 30) # Draw a line
+    
+    # 3. Investor Info
+    pdf.ln(10) # Line break
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, txt=f"Investor: {investor_name}", ln=True)
+    pdf.cell(0, 10, txt=f"Date: {date.today()}", ln=True)
+    
+    # 4. Summary Box
+    pdf.ln(5)
+    pdf.set_fill_color(240, 240, 240) # Light gray background
+    pdf.cell(0, 10, txt=f"Ending Capital Balance: {fmt(balance)}", ln=True, fill=True)
+    
+    # 5. Transaction Table Header
+    pdf.ln(10)
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(40, 10, "Date", 1)
+    pdf.cell(80, 10, "Description / Type", 1)
+    pdf.cell(40, 10, "Amount", 1, ln=True)
+    
+    # 6. Table Rows
+    pdf.set_font("Arial", "", 10)
+    for index, row in transactions.iterrows():
+        # Clean up date format
+        date_str = str(row['created_at'])[:10] 
+        pdf.cell(40, 10, date_str, 1)
+        pdf.cell(80, 10, row['trans_code'], 1)
+        pdf.cell(40, 10, fmt(row['amount']), 1, ln=True)
+        
+    # 7. Output
+    # Save to a temporary file buffer so Streamlit can download it
+    return pdf.output(dest='S').encode('latin-1')
 
 # --- 1. SETUP DATABASE ---
 # REPLACE WITH YOUR KEYS
@@ -194,6 +241,23 @@ with tab3:
             
             st.table(display_ledger)
             
+            # ... (This goes after st.table) ...
+            
+            st.divider()
+            
+            # GENERATE PDF BUTTON
+            st.subheader("Official Documents")
+            
+            # Create the PDF in memory
+            pdf_bytes = create_pdf(selected_investor, "Harbor View Fund I", ending_balance, df_ledger)
+            
+            # The Download Button
+            st.download_button(
+                label="📥 Download Statement (PDF)",
+                data=pdf_bytes,
+                file_name=f"Statement_{selected_investor}_{date.today()}.pdf",
+                mime="application/pdf"
+            )            
         else:
             st.info("No transactions found for this investor yet. Go run a Capital Call in Tab 2!")
     else:
