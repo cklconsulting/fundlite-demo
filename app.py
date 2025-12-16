@@ -29,7 +29,7 @@ with st.sidebar:
     st.write("**Current Fund:** Harbor View Fund I")
 
 # --- 4. MAIN APP ---
-tab1, tab2 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call"])
+# tab1, tab2, tab3 = st.tabs(["📊 Portfolio Overview", "📢 Run Capital Call", "📄 Live PCAP Statement"])
 
 # === TAB 1: OVERVIEW ===
 with tab1:
@@ -139,3 +139,55 @@ with tab2:
             
     else:
         st.error("No investors found to allocate to.")
+
+
+# === TAB 3: LIVE PCAP STATEMENT ===
+with tab3:
+    st.header("Partner Capital Account (Live)")
+    st.markdown("Select an investor to view their real-time ledger generated from the database.")
+    
+    if supabase and comm_data.data:
+        # 1. SELECTOR: Choose who to look at
+        # We create a dictionary to map Name -> Commitment ID
+        investor_map = {row['Investor Name']: row['id'] for index, row in df.iterrows()}
+        selected_investor = st.selectbox("Select Investor:", list(investor_map.keys()))
+        selected_comm_id = investor_map[selected_investor]
+        
+        st.divider()
+        
+        # 2. QUERY: Fetch only THIS investor's ledger entries
+        # "Select * from ledger_entries WHERE commitment_id = X"
+        response_ledger = supabase.table('ledger_entries')\
+            .select("*")\
+            .eq('commitment_id', selected_comm_id)\
+            .execute()
+            
+        if response_ledger.data:
+            df_ledger = pd.DataFrame(response_ledger.data)
+            
+            # 3. MATH: Calculate the Roll-Forward
+            # Filter for Calls (Contributions)
+            contributions = df_ledger[df_ledger['trans_code'] == 'CC-PRIN']['amount'].sum()
+            
+            # Filter for Distributions (We don't have these yet, but the logic is ready)
+            distributions = df_ledger[df_ledger['trans_code'] == 'DIST-ROC']['amount'].sum()
+            
+            ending_balance = contributions - distributions
+            
+            # 4. DISPLAY: The Statement Header
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Beginning Balance", "$0.00")
+            c2.metric("Contributions", fmt(contributions))
+            c3.metric("Ending Capital", fmt(ending_balance))
+            
+            st.markdown("### Transaction History")
+            
+            # Clean up the table for display
+            display_ledger = df_ledger[['created_at', 'trans_code', 'amount']].copy()
+            display_ledger['amount'] = display_ledger['amount'].apply(fmt)
+            display_ledger.rename(columns={'created_at': 'Date Posted', 'trans_code': 'Type', 'amount': 'Amount'}, inplace=True)
+            
+            st.table(display_ledger)
+            
+        else:
+            st.info("No transactions found for this investor yet. Go run a Capital Call!")
