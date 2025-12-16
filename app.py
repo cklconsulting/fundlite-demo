@@ -6,6 +6,7 @@ from fpdf import FPDF
 import tempfile
 
 # --- 1. SETUP DATABASE CONNECTION ---
+# ⚠️ REPLACE WITH YOUR ACTUAL KEYS
 SUPABASE_URL = "https://ktcrzsbaykddcsjznycs.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt0Y3J6c2JheWtkZGNzanpueWNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5MDM0MzQsImV4cCI6MjA4MTQ3OTQzNH0.si9UsH3BnV6BKT9QG4sTVUsfI5IAUV1a_3qi0vvUGaw" 
 
@@ -22,10 +23,10 @@ supabase = init_connection()
 st.set_page_config(page_title="FundLite | Pro", page_icon="🏦", layout="wide")
 
 def fmt(val):
+    # Helper for the PDF generator only
     return f"${val:,.2f}"
 
 def create_pdf(investor_name, fund_name, balance, transactions):
-    # Setup the Page
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -59,12 +60,11 @@ def create_pdf(investor_name, fund_name, balance, transactions):
     # Table Rows
     pdf.set_font("Arial", "", 10)
     for index, row in transactions.iterrows():
-        # Clean data for PDF
         d_str = str(row['date'])
         t_type = str(row['trans_code'])
-        # If we have a description in the batch, we could pull it, but keeping it simple:
-        desc = "Capital Call" 
-        amt = fmt(row['amount'])
+        desc = "Capital Call"
+        # Ensure amount is treated as float for formatting
+        amt = fmt(float(row['amount']))
         
         pdf.cell(30, 10, d_str, 1)
         pdf.cell(40, 10, t_type, 1)
@@ -82,7 +82,6 @@ with st.sidebar:
         st.error("🔴 DB Connection Failed")
     st.markdown("---")
     st.write("**Fund:** Harbor View Fund I")
-    st.write("**Role:** Controller")
 
 # --- 4. MAIN TABS ---
 tab1, tab2, tab3 = st.tabs(["📊 Fund Overview", "📢 Capital Calls", "📄 Live PCAP Statement"])
@@ -92,19 +91,17 @@ with tab1:
     st.header("Fund Overview")
     
     if supabase:
-        # Fetch Data
         comm_data = supabase.table('commitments').select("*, investors(display_name)").execute()
         
         if comm_data.data:
             df = pd.DataFrame(comm_data.data)
             
-            # Data Cleaning
+            # Logic
             df['Investor Name'] = df['investors'].apply(lambda x: x['display_name'] if x else "Unknown")
-            df['Commitment'] = df['committed_amount']
+            df['Commitment'] = df['committed_amount'] # Keep as FLOAT (Number)
             
-            # Stats
             total_fund = df['Commitment'].sum()
-            df['Ownership %'] = (df['Commitment'] / total_fund) * 100
+            df['Ownership %'] = (df['Commitment'] / total_fund) * 100 # Keep as FLOAT
             
             # KPI Cards
             c1, c2 = st.columns(2)
@@ -113,29 +110,20 @@ with tab1:
             
             st.divider()
             
-            # Cap Table Display
+            # Cap Table
             st.subheader("Cap Table (Ownership)")
             
-            # Prepare display dataframe
             display_df = df[['Investor Name', 'Commitment', 'Ownership %']].copy()
-            display_df['Commitment'] = display_df['Commitment'].apply(fmt)
-            display_df['Ownership %'] = display_df['Ownership %'].apply(lambda x: f"{x:.2f}%")
-            
-            # 1. Start numbering at 1
             display_df.index = display_df.index + 1
             
-            # 2. Right Align Numbers (The Fix)
-            # Note: We use st.table() because it renders the CSS styling strictly.
-            # st.dataframe() sometimes overrides custom CSS.
-            styled_df = display_df.style.set_properties(
-                subset=['Commitment', 'Ownership %'], 
-                **{'text-align': 'right'}
-            )
-            
-            st.table(styled_df)
+            # THE FIX: Use .format() to add style, but keep data numeric for alignment
+            st.table(display_df.style.format({
+                'Commitment': '${:,.2f}',
+                'Ownership %': '{:.2f}%'
+            }))
             
         else:
-            st.warning("No investors found. Go add some in Supabase!")
+            st.warning("No investors found.")
 
 # === TAB 2: CAPITAL CALL (MAKER / CHECKER) ===
 with tab2:
@@ -158,31 +146,24 @@ with tab2:
                 df_draft = pd.DataFrame(comm_resp.data)
                 df_draft['Investor'] = df_draft['investors'].apply(lambda x: x['display_name'])
                 
-                # Calculate
                 total_comm = df_draft['committed_amount'].sum()
+                # Calculate Share (Keep as Float)
                 df_draft['Share'] = (df_draft['committed_amount'] / total_comm) * draft_amount
                 
                 # Preview
                 st.markdown("### Allocation Preview")
                 preview_df = df_draft[['Investor', 'Share']].copy()
-                preview_df['Share'] = preview_df['Share'].apply(fmt)
-                
-                # Style
                 preview_df.index = preview_df.index + 1
-                styled_preview = preview_df.style.set_properties(
-                    subset=['Share'], 
-                    **{'text-align': 'right'}
-                )
-                st.table(styled_preview)
+                
+                # THE FIX: Format as Currency
+                st.table(preview_df.style.format({'Share': '${:,.2f}'}))
                 
                 if st.button("💾 Save as Draft", type="primary"):
                     try:
-                        # Create Batch
                         batch_data = {"batch_date": str(draft_date), "description": f"Call: {fmt(draft_amount)}", "status": "DRAFT"}
                         b_resp = supabase.table('batches').insert(batch_data).execute()
                         new_batch_id = b_resp.data[0]['id']
                         
-                        # Create Entries
                         entries = []
                         for idx, row in df_draft.iterrows():
                             entries.append({
@@ -217,16 +198,14 @@ with tab2:
                     df_review = pd.DataFrame(draft_entries.data)
                     df_review['Investor'] = df_review['commitments'].apply(lambda x: x['investors']['display_name'] if x and x['investors'] else "Unknown")
                     
-                    disp_review = df_review[['Investor', 'amount']].copy()
-                    disp_review['amount'] = disp_review['amount'].apply(fmt)
+                    # Ensure amount is float
+                    df_review['amount'] = df_review['amount'].astype(float)
                     
-                    # Style
+                    disp_review = df_review[['Investor', 'amount']].copy()
                     disp_review.index = disp_review.index + 1
-                    styled_review = disp_review.style.set_properties(
-                        subset=['amount'], 
-                        **{'text-align': 'right'}
-                    )
-                    st.table(styled_review)
+                    
+                    # THE FIX: Format currency
+                    st.table(disp_review.style.format({'amount': '${:,.2f}'}))
                     
                     col_p1, col_p2 = st.columns([1, 4])
                     with col_p1:
@@ -270,6 +249,9 @@ with tab3:
                     posted_df = raw_df[raw_df['status'] == 'POSTED'].copy()
                     
                     if not posted_df.empty:
+                        # Convert to float for math
+                        posted_df['amount'] = posted_df['amount'].astype(float)
+                        
                         contrib = posted_df[posted_df['trans_code'] == 'CC-PRIN']['amount'].sum()
                         end_bal = contrib 
                         
@@ -280,16 +262,11 @@ with tab3:
                         
                         st.subheader("Transaction History")
                         hist_df = posted_df[['date', 'trans_code', 'amount']].copy()
-                        hist_df['amount'] = hist_df['amount'].apply(fmt)
                         hist_df.columns = ["Date", "Type", "Amount"]
-                        
-                        # Style
                         hist_df.index = hist_df.index + 1
-                        styled_hist = hist_df.style.set_properties(
-                            subset=['Amount'], 
-                            **{'text-align': 'right'}
-                        )
-                        st.table(styled_hist)
+                        
+                        # THE FIX: Format Currency
+                        st.table(hist_df.style.format({'Amount': '${:,.2f}'}))
                         
                         st.divider()
                         pdf_bytes = create_pdf(sel_inv_name, "Harbor View Fund I", end_bal, posted_df)
