@@ -99,17 +99,43 @@ with tab2:
         
         st.info(f"ℹ️ You are calling **{fmt(call_amount)}**. Based on commitments, the system calculated the split above.")
         
-        # 3. EXECUTE (Write to DB)
+        # 3. EXECUTE (Real Database Write)
         st.divider()
-        if st.button("🚀 Post to Ledger", type="primary"):
-            st.write("Writing to database... (Simulation Mode)")
+        if st.button("🚀 Post to Ledger (REAL)", type="primary"):
             
-            # THIS IS WHERE WE WOULD WRITE THE INSERT CODE
-            # For each investor in the list:
-            # supabase.table('ledger_entries').insert({ ... })
-            
-            st.success(f"Successfully posted Capital Call for {fmt(call_amount)}!")
-            st.balloons()
+            with st.spinner("Writing to Ledger..."):
+                try:
+                    # A. CREATE THE BATCH (The "Folder" for these transactions)
+                    batch_data = {
+                        "batch_date": str(call_date),
+                        "description": f"Capital Call: {fmt(call_amount)}",
+                        "status": "POSTED"
+                    }
+                    # Insert and get the new Batch ID back
+                    batch_resp = supabase.table('batches').insert(batch_data).execute()
+                    new_batch_id = batch_resp.data[0]['id']
+                    
+                    # B. PREPARE THE LEDGER ENTRIES
+                    entries_to_insert = []
+                    
+                    # Loop through our calculated dataframe
+                    for index, row in df.iterrows():
+                        entry = {
+                            "batch_id": new_batch_id,
+                            "commitment_id": row['id'],      # The Investor's Contract ID
+                            "trans_code": "CC-PRIN",         # Code for "Principal Call"
+                            "amount": row['Call Amount']     # Their calculated share
+                        }
+                        entries_to_insert.append(entry)
+                    
+                    # C. BULK INSERT (One command to save them all)
+                    supabase.table('ledger_entries').insert(entries_to_insert).execute()
+                    
+                    st.success(f"✅ Success! Posted Batch #{new_batch_id[:8]}...")
+                    st.balloons()
+                    
+                except Exception as e:
+                    st.error(f"❌ Database Error: {str(e)}")
             
     else:
         st.error("No investors found to allocate to.")
