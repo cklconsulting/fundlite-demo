@@ -114,8 +114,6 @@ with tab1:
         
             
             # --- THE FIX: Right-Align Numbers using Pandas Styler ---
-            st.subheader("Cap Table (Ownership)")
-            
             # 1. Start Index at 1
             display_df.index = display_df.index + 1
             
