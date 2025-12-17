@@ -62,8 +62,10 @@ def create_pdf(investor_name, fund_name, balance, unfunded, transactions):
     for index, row in transactions.iterrows():
         d_str = str(row['date'])
         t_type = str(row['trans_code'])
-        desc = "Transaction" 
-        # Clean Description logic could go here
+        # Simple Logic to clean up Description
+        if "Call" in str(row['trans_code']): desc = "Capital Call"
+        elif "DIST" in str(row['trans_code']): desc = "Distribution"
+        else: desc = "P&L Allocation"
         
         amt = fmt(float(row['amount']))
         
@@ -85,8 +87,8 @@ with st.sidebar:
     st.write("**Fund:** Harbor View Fund I")
 
 # --- 4. MAIN TABS ---
-# UPDATED: Added Tab 4 for P&L
-tab1, tab2, tab4, tab3 = st.tabs(["📊 Fund Overview", "📢 Capital Calls", "📈 P&L Allocation", "📄 Live PCAP Statement"])
+# UPDATED: Added Tab 5 for Distributions
+tab1, tab2, tab4, tab5, tab3 = st.tabs(["📊 Fund Overview", "📢 Capital Calls", "📈 P&L Allocation", "💸 Distributions", "📄 Live PCAP Statement"])
 
 # === TAB 1: OVERVIEW ===
 with tab1:
@@ -140,8 +142,6 @@ with tab2:
                     preview_df = df_draft[['Investor', 'Share']].copy()
                     preview_df.index = preview_df.index + 1
                     st.table(preview_df.style.format({'Share': '${:,.2f}'}))
-                    
-                    # Store in session state so we can save next
                     st.session_state['last_cc_draft'] = df_draft
 
             if st.button("💾 Save Capital Call Draft", type="primary"):
@@ -150,15 +150,9 @@ with tab2:
                         batch_data = {"batch_date": str(draft_date), "description": f"Call: {fmt(draft_amount)}", "status": "DRAFT"}
                         b_resp = supabase.table('batches').insert(batch_data).execute()
                         new_batch_id = b_resp.data[0]['id']
-                        
                         entries = []
                         for idx, row in st.session_state['last_cc_draft'].iterrows():
-                            entries.append({
-                                "batch_id": new_batch_id,
-                                "commitment_id": row['id'],
-                                "trans_code": "CC-PRIN",
-                                "amount": row['Share']
-                            })
+                            entries.append({"batch_id": new_batch_id, "commitment_id": row['id'], "trans_code": "CC-PRIN", "amount": row['Share']})
                         supabase.table('ledger_entries').insert(entries).execute()
                         st.success("✅ Draft Saved!")
                     except Exception as e:
@@ -167,12 +161,9 @@ with tab2:
                     st.error("Please calculate split first.")
 
     with call_tab2:
-        st.subheader("Step 2: Review & Post")
+        st.subheader("Review & Post")
         if supabase:
-            # Fetch batches that are DRAFT and have 'Call' in description
-            # (Simple filter, in production we would use a type field)
             draft_batches = supabase.table('batches').select("*").eq('status', 'DRAFT').ilike('description', '%Call%').execute()
-            
             if draft_batches.data:
                 batch_options = {f"{b['description']} ({b['batch_date']})": b['id'] for b in draft_batches.data}
                 sel_desc = st.selectbox("Select Call Draft:", list(batch_options.keys()))
@@ -192,12 +183,12 @@ with tab2:
                         supabase.table('batches').update({"status": "POSTED"}).eq('id', sel_id).execute()
                         st.success("Posted!")
                         st.rerun()
+            else:
+                st.info("No pending drafts.")
 
-# === TAB 4: P&L ALLOCATION (NEW!) ===
+# === TAB 4: P&L ALLOCATION ===
 with tab4:
     st.header("P&L Allocation")
-    st.info("Allocate Income, Expenses, Gains, or Losses pro-rata to investors.")
-    
     pl_tab1, pl_tab2 = st.tabs(["1️⃣ Draft P&L", "2️⃣ Review & Post"])
     
     with pl_tab1:
@@ -205,61 +196,37 @@ with tab4:
         with c1:
             pl_amount = st.number_input("Total Amount ($)", value=10000.00, step=500.00)
         with c2:
-            # Map friendly names to DB codes
-            type_map = {
-                "Income (Ordinary)": "INC-ORD",
-                "Expense (General)": "EXP-GEN",
-                "Gain (Realized)": "GAIN-RL",
-                "Loss (Realized)": "LOSS-RL"
-            }
+            type_map = {"Income (Ordinary)": "INC-ORD", "Expense (General)": "EXP-GEN", "Gain (Realized)": "GAIN-RL", "Loss (Realized)": "LOSS-RL"}
             pl_type = st.selectbox("Transaction Type", list(type_map.keys()))
             db_code = type_map[pl_type]
-            
         with c3:
-            pl_date = st.date_input("Transaction Date")
-            
-        pl_desc = st.text_input("Description", "Q1 Management Fees")
+            pl_date = st.date_input("Trans. Date", key="pl_date")
+        pl_desc = st.text_input("Description", "Q1 Fees")
 
         if supabase:
-            if st.button("Preview Allocation"):
-                # Fetch investors
+            if st.button("Preview P&L Split"):
                 comm_resp = supabase.table('commitments').select("*, investors(display_name)").execute()
                 if comm_resp.data:
                     df_pl = pd.DataFrame(comm_resp.data)
                     df_pl['Investor'] = df_pl['investors'].apply(lambda x: x['display_name'])
                     total_comm = df_pl['committed_amount'].sum()
-                    
-                    # Pro-rata Logic
                     df_pl['Share'] = (df_pl['committed_amount'] / total_comm) * pl_amount
-                    
                     st.markdown("### Allocation Preview")
                     preview_pl = df_pl[['Investor', 'Share']].copy()
                     preview_pl.index = preview_pl.index + 1
                     st.table(preview_pl.style.format({'Share': '${:,.2f}'}))
-                    
                     st.session_state['last_pl_draft'] = (df_pl, db_code)
             
             if st.button("💾 Save P&L Draft", type="primary"):
                 if 'last_pl_draft' in st.session_state:
                     df_save, code_save = st.session_state['last_pl_draft']
                     try:
-                        # Batch Description includes type for clarity
-                        batch_data = {
-                            "batch_date": str(pl_date), 
-                            "description": f"{pl_type}: {pl_desc}", 
-                            "status": "DRAFT"
-                        }
+                        batch_data = {"batch_date": str(pl_date), "description": f"{pl_type}: {pl_desc}", "status": "DRAFT"}
                         b_resp = supabase.table('batches').insert(batch_data).execute()
                         new_batch_id = b_resp.data[0]['id']
-                        
                         entries = []
                         for idx, row in df_save.iterrows():
-                            entries.append({
-                                "batch_id": new_batch_id,
-                                "commitment_id": row['id'],
-                                "trans_code": code_save,
-                                "amount": row['Share']
-                            })
+                            entries.append({"batch_id": new_batch_id, "commitment_id": row['id'], "trans_code": code_save, "amount": row['Share']})
                         supabase.table('ledger_entries').insert(entries).execute()
                         st.success("✅ P&L Draft Saved!")
                     except Exception as e:
@@ -268,9 +235,8 @@ with tab4:
     with pl_tab2:
         st.subheader("Review P&L Drafts")
         if supabase:
-            # Filter for P&L types (Not 'Call')
-            draft_batches = supabase.table('batches').select("*").eq('status', 'DRAFT').not_.ilike('description', '%Call%').execute()
-            
+            # Filter for P&L types (Batches that are NOT Call and NOT Distribution)
+            draft_batches = supabase.table('batches').select("*").eq('status', 'DRAFT').not_.ilike('description', '%Call%').not_.ilike('description', '%Dist%').execute()
             if draft_batches.data:
                 batch_options = {f"{b['description']} ({b['batch_date']})": b['id'] for b in draft_batches.data}
                 sel_desc = st.selectbox("Select P&L Draft:", list(batch_options.keys()))
@@ -286,13 +252,13 @@ with tab4:
                     disp.index = disp.index + 1
                     st.table(disp.style.format({'amount': '${:,.2f}'}))
                     
-                    col1, col2 = st.columns([1,4])
-                    with col1:
+                    c1, c2 = st.columns([1,4])
+                    with c1:
                         if st.button("🚀 POST P&L"):
                             supabase.table('batches').update({"status": "POSTED"}).eq('id', sel_id).execute()
                             st.success("Posted!")
                             st.rerun()
-                    with col2:
+                    with c2:
                         if st.button("🗑️ DELETE"):
                              supabase.table('ledger_entries').delete().eq('batch_id', sel_id).execute()
                              supabase.table('batches').delete().eq('id', sel_id).execute()
@@ -300,10 +266,107 @@ with tab4:
             else:
                 st.info("No pending P&L drafts.")
 
-# === TAB 3: LIVE PCAP STATEMENT (UPDATED) ===
+# === TAB 5: DISTRIBUTIONS (NEW!) ===
+with tab5:
+    st.header("Distributions (Cash Out)")
+    st.markdown("Distribute cash to investors. Choose **Return of Capital** (ROC) or **Gain**.")
+    
+    dist_tab1, dist_tab2 = st.tabs(["1️⃣ Draft Distribution", "2️⃣ Review & Post"])
+    
+    with dist_tab1:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            dist_amount = st.number_input("Total Distribution ($)", value=50000.00, step=5000.00)
+        with c2:
+            # Code map for distributions
+            dist_map = {"Return of Capital": "DIST-ROC", "Realized Gain Dist": "DIST-GAIN"}
+            dist_type = st.selectbox("Distribution Type", list(dist_map.keys()))
+            dist_code = dist_map[dist_type]
+        with c3:
+            dist_date = st.date_input("Date", key="dist_date")
+            
+        if supabase:
+            if st.button("Preview Distribution"):
+                comm_resp = supabase.table('commitments').select("*, investors(display_name)").execute()
+                if comm_resp.data:
+                    df_dist = pd.DataFrame(comm_resp.data)
+                    df_dist['Investor'] = df_dist['investors'].apply(lambda x: x['display_name'])
+                    total_comm = df_dist['committed_amount'].sum()
+                    
+                    # Pro-rata Split
+                    df_dist['Share'] = (df_dist['committed_amount'] / total_comm) * dist_amount
+                    
+                    st.markdown("### Allocation Preview")
+                    preview_dist = df_dist[['Investor', 'Share']].copy()
+                    preview_dist.index = preview_dist.index + 1
+                    st.table(preview_dist.style.format({'Share': '${:,.2f}'}))
+                    
+                    st.session_state['last_dist_draft'] = (df_dist, dist_code)
+            
+            if st.button("💾 Save Distribution Draft", type="primary"):
+                if 'last_dist_draft' in st.session_state:
+                    df_save, code_save = st.session_state['last_dist_draft']
+                    try:
+                        batch_data = {
+                            "batch_date": str(dist_date), 
+                            "description": f"Dist ({dist_type}): {fmt(dist_amount)}", 
+                            "status": "DRAFT"
+                        }
+                        b_resp = supabase.table('batches').insert(batch_data).execute()
+                        new_batch_id = b_resp.data[0]['id']
+                        
+                        entries = []
+                        for idx, row in df_save.iterrows():
+                            entries.append({
+                                "batch_id": new_batch_id, 
+                                "commitment_id": row['id'], 
+                                "trans_code": code_save, 
+                                "amount": row['Share']
+                            })
+                        supabase.table('ledger_entries').insert(entries).execute()
+                        st.success("✅ Distribution Draft Saved!")
+                    except Exception as e:
+                        st.error(str(e))
+
+    with dist_tab2:
+        st.subheader("Review Distribution Drafts")
+        if supabase:
+            # Filter for Distributions only
+            draft_batches = supabase.table('batches').select("*").eq('status', 'DRAFT').ilike('description', '%Dist%').execute()
+            
+            if draft_batches.data:
+                batch_options = {f"{b['description']} ({b['batch_date']})": b['id'] for b in draft_batches.data}
+                sel_desc = st.selectbox("Select Dist Draft:", list(batch_options.keys()))
+                sel_id = batch_options[sel_desc]
+                
+                draft_entries = supabase.table('ledger_entries').select("*, commitments(investors(display_name))").eq('batch_id', sel_id).execute()
+                if draft_entries.data:
+                    df_rev = pd.DataFrame(draft_entries.data)
+                    df_rev['Investor'] = df_rev['commitments'].apply(lambda x: x['investors']['display_name'])
+                    df_rev['amount'] = df_rev['amount'].astype(float)
+                    
+                    disp = df_rev[['Investor', 'trans_code', 'amount']].copy()
+                    disp.index = disp.index + 1
+                    st.table(disp.style.format({'amount': '${:,.2f}'}))
+                    
+                    c1, c2 = st.columns([1,4])
+                    with c1:
+                        if st.button("🚀 POST DISTRIBUTION"):
+                            supabase.table('batches').update({"status": "POSTED"}).eq('id', sel_id).execute()
+                            st.success("Posted!")
+                            st.rerun()
+                    with c2:
+                        if st.button("🗑️ DELETE"):
+                             supabase.table('ledger_entries').delete().eq('batch_id', sel_id).execute()
+                             supabase.table('batches').delete().eq('id', sel_id).execute()
+                             st.rerun()
+            else:
+                st.info("No pending Distribution drafts.")
+
+# === TAB 3: LIVE PCAP STATEMENT (FINAL) ===
 with tab3:
     st.header("Partner Capital Account (Live)")
-    st.markdown("Real-time view. **Note:** Income/Gains increase balance; Expenses/Losses decrease it.")
+    st.markdown("Real-time view. **Note:** Distributions decrease Ending Capital.")
     
     if supabase:
         all_inv = supabase.table('investors').select("*").execute()
@@ -315,7 +378,7 @@ with tab3:
             
             if comm_res.data:
                 sel_comm_id = comm_res.data[0]['id']
-                total_commitment = float(comm_res.data[0]['committed_amount']) # Get Commitment Amount
+                total_commitment = float(comm_res.data[0]['committed_amount'])
                 
                 # Query Posted Transactions
                 ledger_res = supabase.table('ledger_entries').select("*, batches!inner(status, batch_date)").eq('commitment_id', sel_comm_id).execute()
@@ -331,53 +394,43 @@ with tab3:
                         posted_df['amount'] = posted_df['amount'].astype(float)
                         
                         # --- ACCOUNTING LOGIC ---
-                        # 1. Contributions (Calls)
                         contributions = posted_df[posted_df['trans_code'] == 'CC-PRIN']['amount'].sum()
-                        
-                        # 2. Additions (Income + Gains)
                         additions = posted_df[posted_df['trans_code'].isin(['INC-ORD', 'GAIN-RL'])]['amount'].sum()
-                        
-                        # 3. Deductions (Expenses + Losses)
                         deductions = posted_df[posted_df['trans_code'].isin(['EXP-GEN', 'LOSS-RL'])]['amount'].sum()
                         
-                        # 4. Distributions (Return of Capital) - Future proofing
-                        distributions = posted_df[posted_df['trans_code'] == 'DIST-ROC']['amount'].sum()
+                        # Distributions (Both ROC and Gain decrease the capital account)
+                        distributions = posted_df[posted_df['trans_code'].isin(['DIST-ROC', 'DIST-GAIN'])]['amount'].sum()
                         
-                        # 5. Calculations
+                        # Calculations
                         ending_balance = contributions + additions - deductions - distributions
                         unfunded_balance = total_commitment - contributions
                         
-                        # --- DISPLAY METRICS ---
+                        # Metrics
                         m1, m2, m3, m4 = st.columns(4)
                         m1.metric("Total Commitment", fmt(total_commitment))
-                        m2.metric("Unfunded Balance", fmt(unfunded_balance))
+                        m2.metric("Total Distributed (DPI)", fmt(distributions))
                         m3.metric("Net Income (P&L)", fmt(additions - deductions))
                         m4.metric("Ending Capital", fmt(ending_balance))
                         
                         st.divider()
-                        
-                        # --- HISTORY TABLE ---
                         st.subheader("Transaction History")
                         hist_df = posted_df[['date', 'trans_code', 'amount']].copy()
                         hist_df.columns = ["Date", "Type", "Amount"]
                         hist_df.index = hist_df.index + 1
                         
-                        # Color coding for P&L visuals (Negative for Exp/Loss)
-                        # We create a display column that puts brackets around expenses
+                        # Color coding: Expenses AND Distributions are negative logic
                         def format_accounting(row):
                             val = row['Amount']
                             code = row['Type']
-                            if code in ['EXP-GEN', 'LOSS-RL', 'DIST-ROC']:
+                            if code in ['EXP-GEN', 'LOSS-RL', 'DIST-ROC', 'DIST-GAIN']:
                                 return f"({fmt(val)})"
                             return fmt(val)
 
                         hist_df['Display Amount'] = hist_df.apply(format_accounting, axis=1)
-                        
                         st.table(hist_df[['Date', 'Type', 'Display Amount']].style.set_properties(
                             subset=['Display Amount'], **{'text-align': 'right'}
                         ))
                         
-                        # PDF Download
                         st.divider()
                         pdf_bytes = create_pdf(sel_inv_name, "Harbor View Fund I", ending_balance, unfunded_balance, posted_df)
                         st.download_button("📥 Download Official Statement", pdf_bytes, "statement.pdf", "application/pdf")
@@ -386,4 +439,4 @@ with tab3:
                 else:
                     st.info("No activity found.")
             else:
-                st.warning("No commitment found for this investor.")
+                st.warning("No commitment found.")
