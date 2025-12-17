@@ -406,11 +406,13 @@ with tab3:
                         unfunded_balance = total_commitment - contributions
                         
                         # Metrics
-                        m1, m2, m3, m4 = st.columns(4)
+                        m1, m2, m3, m4, m5 = st.columns(5)
+                        
                         m1.metric("Total Commitment", fmt(total_commitment))
-                        m2.metric("Total Distributed (DPI)", fmt(distributions))
-                        m3.metric("Net Income (P&L)", fmt(additions - deductions))
-                        m4.metric("Ending Capital", fmt(ending_balance))
+                        m2.metric("Unfunded Balance", fmt(unfunded_balance)) 
+                        m3.metric("Total Distributed", fmt(distributions))
+                        m4.metric("Net Income (P&L)", fmt(additions - deductions))
+                        m5.metric("Ending Capital", fmt(ending_balance))
                         
                         st.divider()
                         st.subheader("Transaction History")
